@@ -1,0 +1,56 @@
+# ── Environment ───────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+venv/
+.venv/
+env/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── Memory / Sessions (user data — never commit) ──────────────────────────────
+memory/sessions/
+memory/profile.json
+
+# ── Voice binaries (too large for git) ───────────────────────────────────────
+voice/piper/piper.exe
+voice/piper/*.onnx
+voice/piper/*.onnx.json
+voice/piper/espeak-ng-data/
+voice/whisper/whisper-cli.exe
+voice/whisper/models/
+
+# ── Avatar assets (user-generated images) ─────────────────────────────────────
+avatar/assets/*.png
+avatar/assets/*.jpg
+avatar/assets/*.jpeg
+avatar/assets/*.gif
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Logs and temp files ───────────────────────────────────────────────────────
+*.log
+*.tmp
+*.wav
+test.wav
+test_voice.wav
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+desktop.ini
