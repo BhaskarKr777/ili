@@ -4,11 +4,11 @@ ili — Interactive Learning Intelligence
 
 Usage:
     python main.py                              # pick mode on startup
-    python main.py --mode math                  # start directly in math mode
-    python main.py --mode friend                # just chat
-    python main.py --voice-out                  # text input + spoken output
-    python main.py --avatar                     # show floating avatar
-    python main.py --engine local --voice-out --avatar --mode coding
+    python main.py --mode math                  # start in math mode
+    python main.py --voice-out                  # voice output
+    python main.py --avatar                     # floating avatar
+    python main.py --agent                      # enable computer access
+    python main.py --engine local --voice-out --avatar --agent
 """
 
 import argparse
@@ -34,14 +34,14 @@ from ui.cli import run_cli, pick_mode_on_startup
 def parse_args():
     parser = argparse.ArgumentParser(description="ili — Interactive Learning Intelligence")
     parser.add_argument("--engine",    type=str, default="local", choices=SUPPORTED_ENGINES)
-    parser.add_argument("--mode",      type=str, default=None,    choices=MODE_KEYS,
-                        help="Subject mode: general, math, science, coding, language, history, friend")
-    parser.add_argument("--voice",     action="store_true", help="Mic input + voice output")
-    parser.add_argument("--voice-in",  action="store_true", help="Mic input only")
-    parser.add_argument("--voice-out", action="store_true", help="Voice output only")
-    parser.add_argument("--avatar",    action="store_true", help="Show avatar window")
-    parser.add_argument("--name",      type=str, default=None,    help="Your name")
-    parser.add_argument("--model",     type=str, default=None,    help="Override LLM model")
+    parser.add_argument("--mode",      type=str, default=None,    choices=MODE_KEYS)
+    parser.add_argument("--voice",     action="store_true")
+    parser.add_argument("--voice-in",  action="store_true")
+    parser.add_argument("--voice-out", action="store_true")
+    parser.add_argument("--avatar",    action="store_true")
+    parser.add_argument("--agent",     action="store_true", help="Enable computer access tools")
+    parser.add_argument("--name",      type=str, default=None)
+    parser.add_argument("--model",     type=str, default=None)
     return parser.parse_args()
 
 
@@ -78,15 +78,28 @@ def main():
         memory.set_student_name(args.name)
     memory.startup(engine_name=args.engine)
 
-    # ── Mode selection ────────────────────────────────────────────────────
-    # If --mode flag given, skip menu. Otherwise show startup picker.
-    if args.mode:
-        initial_mode = args.mode
-    else:
-        initial_mode = pick_mode_on_startup()
+    # ── Mode ─────────────────────────────────────────────────────────────
+    initial_mode = args.mode or pick_mode_on_startup()
+
+    # ── Agent (optional) ──────────────────────────────────────────────────
+    agent = None
+    if args.agent:
+        from core.agent import Agent
+        from core.tools import ALL_TOOLS
+        from core.tools.code_writer_tool import CodeWriterTool
+
+        # Inject engine into CodeWriterTool so it can generate code
+        CodeWriterTool.engine = engine
+
+        agent = Agent(engine=engine, tools=ALL_TOOLS)
+        print("\n🤖 Computer access enabled — ili can use tools!\n")
+        print("  Tools available:")
+        for tool in ALL_TOOLS:
+            print(f"    • {tool.name}: {tool.description}")
+        print()
 
     # ── Tutor ────────────────────────────────────────────────────────────
-    tutor = Tutor(engine=engine, memory=memory, mode=initial_mode)
+    tutor = Tutor(engine=engine, memory=memory, mode=initial_mode, agent=agent)
 
     # ── Avatar ───────────────────────────────────────────────────────────
     if args.avatar:
@@ -102,12 +115,12 @@ def main():
                 "voice_output": voice_output,
                 "avatar":       avatar,
                 "initial_mode": initial_mode,
+                "agent_enabled": args.agent,
             },
             daemon=True,
         )
         cli_thread.start()
         avatar.launch()
-
     else:
         run_cli(
             tutor=tutor,
@@ -116,6 +129,7 @@ def main():
             voice_output=voice_output,
             avatar=None,
             initial_mode=initial_mode,
+            agent_enabled=args.agent,
         )
 
 
