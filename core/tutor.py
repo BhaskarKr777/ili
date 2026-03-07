@@ -4,23 +4,7 @@ from core.modes import SubjectMode, get_mode, MODES, DEFAULT_MODE
 import re
 
 
-GESTURE_INSTRUCTION = """
-RULE: Start EVERY response with exactly one gesture tag, then your answer.
-Tags: [GESTURE:happy] [GESTURE:thinking] [GESTURE:confused] [GESTURE:pointing] [GESTURE:nodding] [GESTURE:talking] [GESTURE:idle]
-
-When to use each:
-[GESTURE:thinking]  — explaining something complex or working something out
-[GESTURE:pointing]  — listing steps or directing attention to something specific
-[GESTURE:happy]     — student got something right, good news, encouragement
-[GESTURE:confused]  — unclear question, need clarification
-[GESTURE:nodding]   — agreeing, acknowledging, casual chat responses
-[GESTURE:talking]   — general answers and explanations
-[GESTURE:idle]      — greetings and very short one-liners
-
-BAD: "Note that... [GESTURE:nodding] Here is my answer"
-GOOD: "[GESTURE:thinking] Trigonometry studies triangles..."
-
-Answer immediately after the tag. No disclaimers, no meta-comments."""
+GESTURE_INSTRUCTION = "Start response with one tag: [GESTURE:thinking] [GESTURE:pointing] [GESTURE:happy] [GESTURE:confused] [GESTURE:nodding] [GESTURE:talking] [GESTURE:idle]\nThen answer directly. No extra commentary."
 
 
 class Tutor:
@@ -36,16 +20,17 @@ class Tutor:
     }
     DEFAULT_GESTURE = "idle"
 
-    def __init__(self, engine: BaseEngine, memory: Memory = None, mode: str = DEFAULT_MODE):
+    def __init__(self, engine: BaseEngine, memory: Memory = None,
+                 mode: str = DEFAULT_MODE, agent=None):
         self.engine        = engine
         self.memory        = memory or Memory()
         self._last_gesture = self.DEFAULT_GESTURE
         self._mode         = get_mode(mode)
+        self._agent        = agent
 
     # ─── Mode control ─────────────────────────────────────────────────────
 
     def set_mode(self, mode_name: str) -> str:
-        """Switch subject mode. Returns welcome message for new mode."""
         self._mode = get_mode(mode_name)
         self.memory.clear()
         return f"{self._mode.emoji} Switched to **{self._mode.name}** mode!\n{self._mode.welcome}"
@@ -56,12 +41,27 @@ class Tutor:
 
     # ─── Main ask ─────────────────────────────────────────────────────────
 
-    def ask(self, user_input: str, avatar=None) -> str:
-        history  = self.memory.get_context_text()
-        prompt   = self._build_prompt(user_input, history)
+    def ask(self, user_input: str, avatar=None, confirm_fn=None) -> str:
+        # ── Try agent first if available ──────────────────────────────────
+        if self._agent:
+            response, used_tool = self._agent.process(
+                user_input, confirm_fn=confirm_fn
+            )
+            if used_tool:
+                gesture, final = self._parse_gesture(response)
+                self._last_gesture = gesture
+                print(f"[DEBUG] Agent tool used | Gesture: {gesture}")
+                if avatar:
+                    avatar.set_gesture(gesture)
+                self.memory.add("user", user_input)
+                self.memory.add("tutor", final)
+                return final
 
-        raw_response = self.engine.generate(prompt)
-        clean        = self._clean_response(raw_response)
+        # ── Normal tutor response ─────────────────────────────────────────
+        history        = self.memory.get_context_text()
+        prompt         = self._build_prompt(user_input, history)
+        raw_response   = self.engine.generate(prompt)
+        clean          = self._clean_response(raw_response)
         gesture, final = self._parse_gesture(clean)
 
         self._last_gesture = gesture
@@ -78,13 +78,13 @@ class Tutor:
     # ─── Prompt building ──────────────────────────────────────────────────
 
     def _build_prompt(self, user_input: str, history: str) -> str:
-        prompt  = self._mode.system_prompt
-        prompt += f"\n\n{GESTURE_INSTRUCTION}"
+        prompt  = f"{self._mode.system_prompt}\n\n"
+        prompt += f"{GESTURE_INSTRUCTION}\n"
 
         if history:
-            prompt += f"\n\nConversation so far:\n{history}"
+            prompt += f"\nConversation so far:\n{history}\n"
 
-        prompt += f"\n\nStudent: {user_input}\nili:"
+        prompt += f"\nStudent: {user_input}\nili:"
         return prompt
 
     # ─── Response cleaning ────────────────────────────────────────────────
@@ -92,47 +92,46 @@ class Tutor:
     def _clean_response(self, response: str) -> str:
         response = response.strip()
 
-        # If model echoed prompt, take everything after last "ili:"
         if "ili:" in response:
-            parts    = response.split("ili:")
-            response = parts[-1].strip()
+            response = response.split("ili:")[-1].strip()
 
-        # Remove prompt echo lines
         bad_phrases = [
-            "you are ili", "start every reply", "example reply",
-            "gesture instruction", "rule:", "bad:", "good:",
-            "student asks", "your response", "teaching style",
-            "when to use", "tags:", "answer immediately",
+            "you are ili", "start response with",
+            "gesture instruction", "rule:", "tags:", "then answer",
+            "no extra commentary",
         ]
         lines = response.splitlines()
-        clean_lines = []
-        for line in lines:
-            if not any(p in line.lower() for p in bad_phrases):
-                clean_lines.append(line)
+        clean_lines = [
+            line for line in lines
+            if not any(p in line.lower() for p in bad_phrases)
+        ]
         response = "\n".join(clean_lines).strip()
 
-        # If multiple gesture tags, take from the last one
         all_tags = list(re.finditer(r"\[GESTURE:\w+\]", response))
         if len(all_tags) > 1:
-            last     = all_tags[-1]
-            response = response[last.start():].strip()
+            response = response[all_tags[-1].start():].strip()
 
         return response
 
     def _parse_gesture(self, response: str) -> tuple[str, str]:
         response = response.strip()
-        match    = re.match(r"^\[GESTURE:(\w+)\]\s*", response)
 
+        # Remove hallucinated end tags
+        response = re.sub(r'\[END_TAG\]|\[END\]|\[STOP\]', '', response).strip()
+
+        match = re.match(r"^\[GESTURE:(\w+)\]\s*", response)
         if match:
             tag     = match.group(1).lower()
             gesture = self.GESTURE_MAP.get(tag, self.DEFAULT_GESTURE)
             clean   = response[match.end():].strip()
-
+            # Remove any remaining gesture tags from the response body
+            clean   = re.sub(r'\[GESTURE:\w+\]', '', clean).strip()
             if not clean:
                 clean = "I'm here! What would you like to learn or talk about?"
-
             return gesture, clean
 
+        # No gesture tag — strip any stray tags from body
+        response = re.sub(r'\[GESTURE:\w+\]', '', response).strip()
         return self.DEFAULT_GESTURE, response
 
     def reset(self):
