@@ -3,12 +3,13 @@ ili — Interactive Learning Intelligence
 ========================================
 
 Usage:
-    python main.py                              # pick mode on startup
+    python main.py                              # GUI (default)
+    python main.py --cli                        # terminal mode
     python main.py --mode math                  # start in math mode
     python main.py --voice-out                  # voice output
-    python main.py --avatar                     # floating avatar
+    python main.py --avatar                     # floating avatar (cli mode)
     python main.py --agent                      # enable computer access
-    python main.py --engine local --voice-out --avatar --agent
+    python main.py --engine local --agent       # full experience
 """
 
 import argparse
@@ -40,6 +41,7 @@ def parse_args():
     parser.add_argument("--voice-out", action="store_true")
     parser.add_argument("--avatar",    action="store_true")
     parser.add_argument("--agent",     action="store_true", help="Enable computer access tools")
+    parser.add_argument("--cli",       action="store_true", help="Use terminal UI instead of GUI")
     parser.add_argument("--name",      type=str, default=None)
     parser.add_argument("--model",     type=str, default=None)
     return parser.parse_args()
@@ -79,7 +81,7 @@ def main():
     memory.startup(engine_name=args.engine)
 
     # ── Mode ─────────────────────────────────────────────────────────────
-    initial_mode = args.mode or pick_mode_on_startup()
+    initial_mode = args.mode or (pick_mode_on_startup() if args.cli else "general")
 
     # ── Agent (optional) ──────────────────────────────────────────────────
     agent = None
@@ -88,20 +90,45 @@ def main():
         from core.tools import ALL_TOOLS
         from core.tools.code_writer_tool import CodeWriterTool
 
-        # Inject engine into CodeWriterTool so it can generate code
         CodeWriterTool.engine = engine
-
         agent = Agent(engine=engine, tools=ALL_TOOLS)
-        print("\n🤖 Computer access enabled — ili can use tools!\n")
-        print("  Tools available:")
-        for tool in ALL_TOOLS:
-            print(f"    • {tool.name}: {tool.description}")
-        print()
+
+        if args.cli:
+            print("\n🤖 Computer access enabled — ili can use tools!\n")
+            for tool in ALL_TOOLS:
+                print(f"    • {tool.name}: {tool.description}")
+            print()
 
     # ── Tutor ────────────────────────────────────────────────────────────
     tutor = Tutor(engine=engine, memory=memory, mode=initial_mode, agent=agent)
 
-    # ── Avatar ───────────────────────────────────────────────────────────
+    # ── Launch UI ─────────────────────────────────────────────────────────
+
+    # GUI mode (default)
+    if not args.cli:
+        try:
+            from PyQt5.QtWidgets import QApplication
+            from ui.chat_window import run_gui
+            run_gui(
+                tutor         = tutor,
+                engine_name   = args.engine,
+                initial_mode  = initial_mode,
+                voice_output  = voice_output,
+                agent_enabled = args.agent,
+            )
+        except ImportError:
+            print("\n⚠  PyQt5 not installed. Falling back to terminal mode.")
+            print("   Install with: pip install PyQt5\n")
+            _run_cli_mode(tutor, args, voice_mode, voice_output, initial_mode)
+        return
+
+    # CLI mode (--cli flag)
+    _run_cli_mode(tutor, args, voice_mode, voice_output, initial_mode)
+
+
+def _run_cli_mode(tutor, args, voice_mode, voice_output, initial_mode):
+    from ui.cli import run_cli
+
     if args.avatar:
         from avatar.avatar_window import AvatarWindow
         avatar = AvatarWindow()
@@ -109,12 +136,12 @@ def main():
         cli_thread = threading.Thread(
             target=run_cli,
             kwargs={
-                "tutor":        tutor,
-                "engine_name":  args.engine,
-                "voice_mode":   voice_mode,
-                "voice_output": voice_output,
-                "avatar":       avatar,
-                "initial_mode": initial_mode,
+                "tutor":         tutor,
+                "engine_name":   args.engine,
+                "voice_mode":    voice_mode,
+                "voice_output":  voice_output,
+                "avatar":        avatar,
+                "initial_mode":  initial_mode,
                 "agent_enabled": args.agent,
             },
             daemon=True,
@@ -123,13 +150,13 @@ def main():
         avatar.launch()
     else:
         run_cli(
-            tutor=tutor,
-            engine_name=args.engine,
-            voice_mode=voice_mode,
-            voice_output=voice_output,
-            avatar=None,
-            initial_mode=initial_mode,
-            agent_enabled=args.agent,
+            tutor         = tutor,
+            engine_name   = args.engine,
+            voice_mode    = voice_mode,
+            voice_output  = voice_output,
+            avatar        = None,
+            initial_mode  = initial_mode,
+            agent_enabled = args.agent,
         )
 
 
