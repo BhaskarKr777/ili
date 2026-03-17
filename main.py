@@ -7,7 +7,7 @@ Usage:
     python main.py --cli                        # terminal mode
     python main.py --mode math                  # start in math mode
     python main.py --voice-out                  # voice output
-    python main.py --avatar                     # floating avatar (cli mode)
+    python main.py --avatar                     # floating avatar (works in both GUI and CLI)
     python main.py --agent                      # enable computer access
     python main.py --engine local --agent       # full experience
 """
@@ -104,26 +104,45 @@ def main():
 
     # ── Launch UI ─────────────────────────────────────────────────────────
 
-    # GUI mode (default)
-    if not args.cli:
-        try:
-            from PyQt5.QtWidgets import QApplication
-            from ui.chat_window import run_gui
-            run_gui(
-                tutor         = tutor,
-                engine_name   = args.engine,
-                initial_mode  = initial_mode,
-                voice_output  = voice_output,
-                agent_enabled = args.agent,
-            )
-        except ImportError:
-            print("\n⚠  PyQt5 not installed. Falling back to terminal mode.")
-            print("   Install with: pip install PyQt5\n")
-            _run_cli_mode(tutor, args, voice_mode, voice_output, initial_mode)
+    # CLI mode
+    if args.cli:
+        _run_cli_mode(tutor, args, voice_mode, voice_output, initial_mode)
         return
 
-    # CLI mode (--cli flag)
-    _run_cli_mode(tutor, args, voice_mode, voice_output, initial_mode)
+    # GUI mode (default)
+    try:
+        from PyQt5.QtWidgets import QApplication
+        from ui.chat_window import run_gui, IliChatWindow
+    except ImportError:
+        print("\n⚠  PyQt5 not installed. Falling back to terminal mode.")
+        print("   Install with: pip install PyQt5\n")
+        _run_cli_mode(tutor, args, voice_mode, voice_output, initial_mode)
+        return
+
+    # ── Optional floating avatar alongside GUI ────────────────────────────
+    avatar = None
+    if args.avatar:
+        from avatar.avatar_window import AvatarWindow
+        avatar = AvatarWindow()
+
+        # Launch pygame avatar in a background thread
+        avatar_thread = threading.Thread(target=avatar.launch, daemon=True)
+        avatar_thread.start()
+
+    # ── Launch PyQt5 GUI ──────────────────────────────────────────────────
+    app = QApplication.instance() or QApplication(sys.argv)
+    app.setStyle("Fusion")
+
+    window = IliChatWindow(
+        tutor         = tutor,
+        engine_name   = args.engine,
+        initial_mode  = initial_mode,
+        voice_output  = voice_output,
+        agent_enabled = args.agent,
+        avatar        = avatar,        # pass avatar so GUI can trigger gestures
+    )
+    window.show()
+    sys.exit(app.exec_())
 
 
 def _run_cli_mode(tutor, args, voice_mode, voice_output, initial_mode):

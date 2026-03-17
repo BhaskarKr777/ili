@@ -1,53 +1,43 @@
 """
 ili Chat UI
 ============
-PyQt5-based chat window that replaces the terminal UI.
-Features: avatar display, chat history, text input, voice toggle,
-document upload, mode switcher.
+PyQt5-based chat window. Supports optional pygame avatar for gestures.
 """
 
 import os
 import sys
 import threading
-import time
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QTextEdit, QLineEdit, QLabel, QComboBox,
-    QFileDialog, QScrollArea, QFrame, QSizePolicy, QGraphicsDropShadowEffect
+    QPushButton, QLineEdit, QLabel, QComboBox,
+    QFileDialog, QScrollArea, QFrame, QSizePolicy,
 )
-from PyQt5.QtCore import (
-    Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation,
-    QEasingCurve, QSize, pyqtProperty, QRect
-)
-from PyQt5.QtGui import (
-    QFont, QColor, QPalette, QPixmap, QPainter, QBrush,
-    QLinearGradient, QPen, QFontDatabase, QIcon, QTextCursor
-)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtGui import QFont, QPixmap
 
-from core.modes import MODES, get_mode, list_modes
+from core.modes import MODES, get_mode
 
 # ─── Theme ────────────────────────────────────────────────────────────────────
-BG          = "#0A0A14"
-BG2         = "#0F1020"
-CARD        = "#12152A"
-CARD2       = "#161B35"
-BORDER      = "#1E2845"
-ACCENT      = "#7C6FFF"
-ACCENT2     = "#FF6B9D"
-TEXT        = "#E2E8FF"
-TEXT_DIM    = "#6B7599"
-TEXT_MUTED  = "#3A4268"
-USER_BG     = "#1A1F3D"
-BOT_BG      = "#111428"
-SUCCESS     = "#4EFFA0"
-WARNING     = "#FFB547"
+BG         = "#0A0A14"
+BG2        = "#0F1020"
+CARD       = "#12152A"
+CARD2      = "#161B35"
+BORDER     = "#1E2845"
+ACCENT     = "#7C6FFF"
+ACCENT2    = "#FF6B9D"
+TEXT       = "#E2E8FF"
+TEXT_DIM   = "#6B7599"
+TEXT_MUTED = "#3A4268"
+USER_BG    = "#1A1F3D"
+BOT_BG     = "#111428"
+SUCCESS    = "#4EFFA0"
+WARNING    = "#FFB547"
+FONT_MONO  = "Consolas"
+FONT_UI    = "Segoe UI"
 
-FONT_MONO   = "Consolas"
-FONT_UI     = "Segoe UI"
 
-
-# ─── Worker thread for LLM responses ─────────────────────────────────────────
+# ─── Worker ───────────────────────────────────────────────────────────────────
 class ResponseWorker(QThread):
     response_ready = pyqtSignal(str, bool)
     thinking_start = pyqtSignal()
@@ -85,14 +75,10 @@ class ResponseWorker(QThread):
         self.response_ready.emit(response, used_tool)
 
 
-# ─── Bubble widget ────────────────────────────────────────────────────────────
+# ─── Message bubble ───────────────────────────────────────────────────────────
 class MessageBubble(QFrame):
     def __init__(self, text: str, is_user: bool, parent=None):
         super().__init__(parent)
-        self.is_user = is_user
-        self._setup(text)
-
-    def _setup(self, text: str):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 6, 12, 6)
         layout.setSpacing(10)
@@ -103,28 +89,16 @@ class MessageBubble(QFrame):
         label.setFont(QFont(FONT_UI, 10))
         label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
 
-        if self.is_user:
-            label.setStyleSheet(f"""
-                color: {TEXT};
-                background: {USER_BG};
-                border: 1px solid {ACCENT}44;
-                border-radius: 14px;
-                padding: 10px 14px;
-            """)
+        if is_user:
+            label.setStyleSheet(f"color:{TEXT};background:{USER_BG};border:1px solid {ACCENT}44;border-radius:14px;padding:10px 14px;")
             layout.addStretch()
             layout.addWidget(label)
         else:
-            label.setStyleSheet(f"""
-                color: {TEXT};
-                background: {BOT_BG};
-                border: 1px solid {BORDER};
-                border-radius: 14px;
-                padding: 10px 14px;
-            """)
+            label.setStyleSheet(f"color:{TEXT};background:{BOT_BG};border:1px solid {BORDER};border-radius:14px;padding:10px 14px;")
             layout.addWidget(label)
             layout.addStretch()
 
-        self.setStyleSheet("background: transparent; border: none;")
+        self.setStyleSheet("background:transparent;border:none;")
 
 
 # ─── Typing indicator ─────────────────────────────────────────────────────────
@@ -135,7 +109,7 @@ class TypingIndicator(QLabel):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update)
         self.setFont(QFont(FONT_MONO, 9))
-        self.setStyleSheet(f"color: {ACCENT}; padding: 6px 16px;")
+        self.setStyleSheet(f"color:{ACCENT};padding:6px 16px;")
         self.hide()
 
     def start(self):
@@ -152,48 +126,32 @@ class TypingIndicator(QLabel):
         self.setText("ili is thinking" + "." * self._dots)
 
 
-# ─── Avatar panel ─────────────────────────────────────────────────────────────
+# ─── Avatar panel (in-window) ─────────────────────────────────────────────────
 class AvatarPanel(QLabel):
     def __init__(self, assets_dir: str, parent=None):
         super().__init__(parent)
         self.assets_dir = assets_dir
-        self._state     = "idle"
+        self._state = "idle"
         self.setFixedSize(200, 220)
         self.setAlignment(Qt.AlignCenter)
-        self._load_pixmap()
-        self.setStyleSheet(f"""
-            background: {CARD};
-            border: 1px solid {BORDER};
-            border-radius: 16px;
-        """)
+        self._load()
+        self.setStyleSheet(f"background:{CARD};border:1px solid {BORDER};border-radius:16px;")
 
-    def _load_pixmap(self):
-        names = {
-            "idle":     "idle.png",
-            "thinking": "thinking.png",
-            "talking":  "talking_1.png",
-            "happy":    "happy.png",
-        }
-        fname = names.get(self._state, "idle.png")
-        path  = os.path.join(self.assets_dir, fname)
+    def _load(self):
+        names = {"idle": "idle.png", "thinking": "thinking.png",
+                 "talking": "talking_1.png", "happy": "happy.png"}
+        path = os.path.join(self.assets_dir, names.get(self._state, "idle.png"))
         if os.path.isfile(path):
-            pix = QPixmap(path).scaled(
-                180, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
+            pix = QPixmap(path).scaled(180, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.setPixmap(pix)
         else:
             self.setText("ili")
             self.setFont(QFont(FONT_MONO, 28, QFont.Bold))
-            self.setStyleSheet(f"""
-                color: {ACCENT};
-                background: {CARD};
-                border: 1px solid {BORDER};
-                border-radius: 16px;
-            """)
+            self.setStyleSheet(f"color:{ACCENT};background:{CARD};border:1px solid {BORDER};border-radius:16px;")
 
     def set_state(self, state: str):
         self._state = state
-        self._load_pixmap()
+        self._load()
 
 
 # ─── Main window ──────────────────────────────────────────────────────────────
@@ -203,17 +161,19 @@ class IliChatWindow(QMainWindow):
     append_signal  = pyqtSignal(str, bool)
 
     def __init__(self, tutor, engine_name: str, initial_mode: str = "general",
-                 voice_output: bool = False, agent_enabled: bool = False):
+                 voice_output: bool = False, agent_enabled: bool = False,
+                 avatar=None):
         super().__init__()
-        self.tutor          = tutor
-        self.engine_name    = engine_name
-        self.current_mode   = initial_mode
-        self.voice_output   = voice_output
-        self.agent_enabled  = agent_enabled
-        self.voice_mode     = False
-        self._doc_content   = None
-        self._doc_name      = None
-        self._worker        = None
+        self.tutor         = tutor
+        self.engine_name   = engine_name
+        self.current_mode  = initial_mode
+        self.voice_output  = voice_output
+        self.agent_enabled = agent_enabled
+        self.voice_mode    = True
+        self._doc_content  = None
+        self._doc_name     = None
+        self._worker       = None
+        self._avatar       = avatar   # pygame AvatarWindow (optional)
 
         self._setup_window()
         self._build_ui()
@@ -223,7 +183,22 @@ class IliChatWindow(QMainWindow):
         self.confirm_signal.connect(self._show_confirm_dialog)
 
         mode = get_mode(initial_mode)
-        self._append_system(f"{mode.welcome}")
+        self._append_system(mode.welcome)
+
+    # ── Gesture helpers — updates BOTH in-window panel and pygame avatar ──
+
+    def _set_state(self, state: str):
+        """Update in-window avatar panel and pygame avatar simultaneously."""
+        self.avatar_panel.set_state(state)
+        if self._avatar:
+            try:
+                state_map = {
+                    "thinking": "thinking", "talking": "talking",
+                    "happy": "happy", "idle": "idle",
+                }
+                self._avatar.set_gesture(state_map.get(state, "idle"))
+            except Exception:
+                pass
 
     # ─── Window setup ─────────────────────────────────────────────────────
 
@@ -232,14 +207,11 @@ class IliChatWindow(QMainWindow):
         self.setMinimumSize(560, 780)
         self.resize(600, 860)
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
-
         screen = QApplication.primaryScreen().geometry()
-        self.move(
-            screen.width()  - self.width()  - 20,
-            screen.height() - self.height() - 60,
-        )
+        self.move(screen.width() - self.width() - 20,
+                  screen.height() - self.height() - 60)
 
-    # ─── UI construction ──────────────────────────────────────────────────
+    # ─── UI ───────────────────────────────────────────────────────────────
 
     def _build_ui(self):
         root = QWidget()
@@ -247,7 +219,6 @@ class IliChatWindow(QMainWindow):
         main = QVBoxLayout(root)
         main.setContentsMargins(0, 0, 0, 0)
         main.setSpacing(0)
-
         main.addWidget(self._build_header())
         main.addWidget(self._build_chat_area(), stretch=1)
         main.addWidget(self._build_input_bar())
@@ -256,41 +227,36 @@ class IliChatWindow(QMainWindow):
         header = QFrame()
         header.setFixedHeight(240)
         header.setObjectName("header")
-
         layout = QHBoxLayout(header)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(16)
 
-        # Avatar
-        assets_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "..", "avatar", "assets"
-        )
-        self.avatar_panel = AvatarPanel(os.path.normpath(assets_dir))
+        assets_dir = os.path.normpath(os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "avatar", "assets"
+        ))
+        self.avatar_panel = AvatarPanel(assets_dir)
         layout.addWidget(self.avatar_panel)
 
-        # Info panel
         info = QVBoxLayout()
         info.setSpacing(8)
 
         title = QLabel("ili")
         title.setFont(QFont(FONT_MONO, 26, QFont.Bold))
-        title.setStyleSheet(f"color: {ACCENT}; letter-spacing: 3px;")
+        title.setStyleSheet(f"color:{ACCENT};letter-spacing:3px;")
         info.addWidget(title)
 
         sub = QLabel("Interactive Learning Intelligence")
         sub.setFont(QFont(FONT_UI, 9))
-        sub.setStyleSheet(f"color: {TEXT_DIM};")
+        sub.setStyleSheet(f"color:{TEXT_DIM};")
         info.addWidget(sub)
 
         info.addSpacing(8)
 
-        # Mode switcher
         mode_row = QHBoxLayout()
-        mode_label = QLabel("Mode")
-        mode_label.setFont(QFont(FONT_UI, 9))
-        mode_label.setStyleSheet(f"color: {TEXT_DIM};")
-        mode_row.addWidget(mode_label)
+        mode_lbl = QLabel("Mode")
+        mode_lbl.setFont(QFont(FONT_UI, 9))
+        mode_lbl.setStyleSheet(f"color:{TEXT_DIM};")
+        mode_row.addWidget(mode_lbl)
 
         self.mode_combo = QComboBox()
         for key, mode in MODES.items():
@@ -305,16 +271,15 @@ class IliChatWindow(QMainWindow):
 
         info.addSpacing(4)
 
-        # Status
         status_row = QHBoxLayout()
         self.status_dot = QLabel("●")
         self.status_dot.setFont(QFont(FONT_MONO, 8))
-        self.status_dot.setStyleSheet(f"color: {SUCCESS};")
+        self.status_dot.setStyleSheet(f"color:{SUCCESS};")
         status_row.addWidget(self.status_dot)
 
         self.status_label = QLabel(f"{self.engine_name.upper()} · Ready")
         self.status_label.setFont(QFont(FONT_UI, 8))
-        self.status_label.setStyleSheet(f"color: {TEXT_DIM};")
+        self.status_label.setStyleSheet(f"color:{TEXT_DIM};")
         status_row.addWidget(self.status_label)
         status_row.addStretch()
         info.addLayout(status_row)
@@ -322,7 +287,6 @@ class IliChatWindow(QMainWindow):
         info.addStretch()
         layout.addLayout(info)
         layout.addStretch()
-
         return header
 
     def _build_chat_area(self):
@@ -348,26 +312,24 @@ class IliChatWindow(QMainWindow):
 
         self.typing = TypingIndicator()
         layout.addWidget(self.typing)
-
         return container
 
     def _build_input_bar(self):
         bar = QFrame()
         bar.setObjectName("inputBar")
         bar.setFixedHeight(110)
-
         outer = QVBoxLayout(bar)
         outer.setContentsMargins(12, 8, 12, 10)
         outer.setSpacing(8)
 
-        # Doc indicator
+        # Doc bar
         self.doc_bar = QFrame()
         self.doc_bar.setObjectName("docBar")
         doc_row = QHBoxLayout(self.doc_bar)
         doc_row.setContentsMargins(8, 4, 8, 4)
         self.doc_label = QLabel()
         self.doc_label.setFont(QFont(FONT_UI, 8))
-        self.doc_label.setStyleSheet(f"color: {WARNING};")
+        self.doc_label.setStyleSheet(f"color:{WARNING};")
         doc_row.addWidget(self.doc_label)
         doc_row.addStretch()
         clear_doc = QPushButton("x")
@@ -381,7 +343,6 @@ class IliChatWindow(QMainWindow):
         # Input row
         input_row = QHBoxLayout()
         input_row.setSpacing(8)
-
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("Ask anything...")
         self.input_field.setFont(QFont(FONT_UI, 10))
@@ -395,7 +356,6 @@ class IliChatWindow(QMainWindow):
         self.send_btn.setFont(QFont(FONT_UI, 9, QFont.Bold))
         self.send_btn.clicked.connect(self._send)
         input_row.addWidget(self.send_btn)
-
         outer.addLayout(input_row)
 
         # Controls row
@@ -410,12 +370,12 @@ class IliChatWindow(QMainWindow):
         self.voice_btn.clicked.connect(self._toggle_voice)
         ctrl_row.addWidget(self.voice_btn)
 
-        self.upload_btn = QPushButton("Upload Doc")
-        self.upload_btn.setObjectName("uploadBtn")
-        self.upload_btn.setFixedHeight(30)
-        self.upload_btn.setFont(QFont(FONT_UI, 8))
-        self.upload_btn.clicked.connect(self._upload_doc)
-        ctrl_row.addWidget(self.upload_btn)
+        upload_btn = QPushButton("Upload Doc")
+        upload_btn.setObjectName("uploadBtn")
+        upload_btn.setFixedHeight(30)
+        upload_btn.setFont(QFont(FONT_UI, 8))
+        upload_btn.clicked.connect(self._upload_doc)
+        ctrl_row.addWidget(upload_btn)
 
         ctrl_row.addStretch()
 
@@ -427,137 +387,38 @@ class IliChatWindow(QMainWindow):
         ctrl_row.addWidget(clear_btn)
 
         outer.addLayout(ctrl_row)
-
         return bar
 
     # ─── Styles ───────────────────────────────────────────────────────────
 
     def _apply_styles(self):
         self.setStyleSheet(f"""
-            QMainWindow, QWidget {{
-                background: {BG};
-                color: {TEXT};
-            }}
-            #header {{
-                background: {BG2};
-                border-bottom: 1px solid {BORDER};
-            }}
-            #chatContainer {{
-                background: {BG};
-            }}
-            #chatScroll {{
-                background: {BG};
-                border: none;
-            }}
-            #chatScroll QScrollBar:vertical {{
-                background: {BG2};
-                width: 6px;
-                border-radius: 3px;
-            }}
-            #chatScroll QScrollBar::handle:vertical {{
-                background: {BORDER};
-                border-radius: 3px;
-                min-height: 30px;
-            }}
-            #chatScroll QScrollBar::add-line:vertical,
-            #chatScroll QScrollBar::sub-line:vertical {{
-                height: 0;
-            }}
-            #inputBar {{
-                background: {BG2};
-                border-top: 1px solid {BORDER};
-            }}
-            #inputField {{
-                background: {CARD};
-                color: {TEXT};
-                border: 1px solid {BORDER};
-                border-radius: 10px;
-                padding: 8px 14px;
-                font-size: 10pt;
-                selection-background-color: {ACCENT}66;
-            }}
-            #inputField:focus {{
-                border: 1px solid {ACCENT}88;
-            }}
-            #sendBtn {{
-                background: {ACCENT};
-                color: white;
-                border: none;
-                border-radius: 10px;
-                font-weight: bold;
-            }}
-            #sendBtn:hover {{ background: #9D92FF; }}
-            #sendBtn:pressed {{ background: #6358DD; }}
-            #sendBtn:disabled {{
-                background: {BORDER};
-                color: {TEXT_MUTED};
-            }}
-            #voiceBtn {{
-                background: {CARD};
-                color: {TEXT_DIM};
-                border: 1px solid {BORDER};
-                border-radius: 8px;
-                padding: 0 12px;
-            }}
-            #voiceBtn:checked {{
-                background: {ACCENT2}22;
-                color: {ACCENT2};
-                border: 1px solid {ACCENT2}88;
-            }}
-            #voiceBtn:hover {{ border-color: {ACCENT}88; }}
-            #uploadBtn {{
-                background: {CARD};
-                color: {TEXT_DIM};
-                border: 1px solid {BORDER};
-                border-radius: 8px;
-                padding: 0 12px;
-            }}
-            #uploadBtn:hover {{
-                border-color: {WARNING}88;
-                color: {WARNING};
-            }}
-            #clearBtn {{
-                background: transparent;
-                color: {TEXT_MUTED};
-                border: 1px solid {TEXT_MUTED}44;
-                border-radius: 8px;
-                padding: 0 12px;
-            }}
-            #clearBtn:hover {{
-                color: {ACCENT2};
-                border-color: {ACCENT2}66;
-            }}
-            #docBar {{
-                background: {WARNING}11;
-                border: 1px solid {WARNING}44;
-                border-radius: 6px;
-            }}
-            #clearDoc {{
-                background: transparent;
-                color: {TEXT_DIM};
-                border: none;
-                font-size: 8pt;
-            }}
-            QComboBox {{
-                background: {CARD};
-                color: {TEXT};
-                border: 1px solid {BORDER};
-                border-radius: 8px;
-                padding: 4px 10px;
-                font-size: 9pt;
-                min-width: 160px;
-            }}
-            QComboBox:hover {{ border-color: {ACCENT}88; }}
-            QComboBox QAbstractItemView {{
-                background: {CARD2};
-                color: {TEXT};
-                border: 1px solid {BORDER};
-                selection-background-color: {ACCENT}44;
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 20px;
-            }}
+            QMainWindow, QWidget {{ background:{BG}; color:{TEXT}; }}
+            #header {{ background:{BG2}; border-bottom:1px solid {BORDER}; }}
+            #chatContainer {{ background:{BG}; }}
+            #chatScroll {{ background:{BG}; border:none; }}
+            #chatScroll QScrollBar:vertical {{ background:{BG2}; width:6px; border-radius:3px; }}
+            #chatScroll QScrollBar::handle:vertical {{ background:{BORDER}; border-radius:3px; min-height:30px; }}
+            #chatScroll QScrollBar::add-line:vertical, #chatScroll QScrollBar::sub-line:vertical {{ height:0; }}
+            #inputBar {{ background:{BG2}; border-top:1px solid {BORDER}; }}
+            #inputField {{ background:{CARD}; color:{TEXT}; border:1px solid {BORDER}; border-radius:10px; padding:8px 14px; font-size:10pt; }}
+            #inputField:focus {{ border:1px solid {ACCENT}88; }}
+            #sendBtn {{ background:{ACCENT}; color:white; border:none; border-radius:10px; font-weight:bold; }}
+            #sendBtn:hover {{ background:#9D92FF; }}
+            #sendBtn:pressed {{ background:#6358DD; }}
+            #sendBtn:disabled {{ background:{BORDER}; color:{TEXT_MUTED}; }}
+            #voiceBtn {{ background:{CARD}; color:{TEXT_DIM}; border:1px solid {BORDER}; border-radius:8px; padding:0 12px; }}
+            #voiceBtn:checked {{ background:{ACCENT2}22; color:{ACCENT2}; border:1px solid {ACCENT2}88; }}
+            #uploadBtn {{ background:{CARD}; color:{TEXT_DIM}; border:1px solid {BORDER}; border-radius:8px; padding:0 12px; }}
+            #uploadBtn:hover {{ border-color:{WARNING}88; color:{WARNING}; }}
+            #clearBtn {{ background:transparent; color:{TEXT_MUTED}; border:1px solid {TEXT_MUTED}44; border-radius:8px; padding:0 12px; }}
+            #clearBtn:hover {{ color:{ACCENT2}; border-color:{ACCENT2}66; }}
+            #docBar {{ background:{WARNING}11; border:1px solid {WARNING}44; border-radius:6px; }}
+            #clearDoc {{ background:transparent; color:{TEXT_DIM}; border:none; font-size:8pt; }}
+            QComboBox {{ background:{CARD}; color:{TEXT}; border:1px solid {BORDER}; border-radius:8px; padding:4px 10px; font-size:9pt; min-width:160px; }}
+            QComboBox:hover {{ border-color:{ACCENT}88; }}
+            QComboBox QAbstractItemView {{ background:{CARD2}; color:{TEXT}; border:1px solid {BORDER}; selection-background-color:{ACCENT}44; }}
+            QComboBox::drop-down {{ border:none; width:20px; }}
         """)
 
     # ─── Chat actions ──────────────────────────────────────────────────────
@@ -571,8 +432,8 @@ class IliChatWindow(QMainWindow):
         self._append_message(text, True)
         self.send_btn.setEnabled(False)
         self.status_label.setText(f"{self.engine_name.upper()} · Thinking...")
-        self.status_dot.setStyleSheet(f"color: {WARNING};")
-        self.avatar_panel.set_state("thinking")
+        self.status_dot.setStyleSheet(f"color:{WARNING};")
+        self._set_state("thinking")
 
         self._worker = ResponseWorker(
             tutor       = self.tutor,
@@ -593,28 +454,30 @@ class IliChatWindow(QMainWindow):
         self._append_message(text, False)
         self.send_btn.setEnabled(True)
         self.status_label.setText(f"{self.engine_name.upper()} · Ready")
-        self.status_dot.setStyleSheet(f"color: {SUCCESS};")
-        self.avatar_panel.set_state("idle")
+        self.status_dot.setStyleSheet(f"color:{SUCCESS};")
+        self._set_state("idle")
 
         if self.voice_output or self.voice_mode:
             threading.Thread(target=self._speak, args=(text,), daemon=True).start()
 
     def _speak(self, text: str):
-      try:
-        from voice.text_to_speech import speak
-        speak(
-            text,
-            on_start = lambda: self.avatar_panel.set_state("talking"),
-            on_stop  = lambda: self.avatar_panel.set_state("idle"),
-            blocking = True,
-        )
-      except Exception as e:
-        print(f"[TTS] {e}")
+        try:
+            from voice.text_to_speech import speak
+            self._set_state("talking")
+            speak(
+                text,
+                on_start = lambda: self._set_state("talking"),
+                on_stop  = lambda: self._set_state("idle"),
+                blocking = True,
+            )
+        except Exception as e:
+            print(f"[TTS] {e}")
+        finally:
+            self._set_state("idle")
 
     def _append_message(self, text: str, is_user: bool):
         bubble = MessageBubble(text, is_user)
-        count  = self.chat_layout.count()
-        self.chat_layout.insertWidget(count - 1, bubble)
+        self.chat_layout.insertWidget(self.chat_layout.count() - 1, bubble)
         QTimer.singleShot(50, self._scroll_to_bottom)
 
     def _append_system(self, text: str):
@@ -622,60 +485,55 @@ class IliChatWindow(QMainWindow):
         label.setWordWrap(True)
         label.setAlignment(Qt.AlignCenter)
         label.setFont(QFont(FONT_UI, 8))
-        label.setStyleSheet(f"color: {TEXT_DIM}; padding: 6px;")
-        count = self.chat_layout.count()
-        self.chat_layout.insertWidget(count - 1, label)
+        label.setStyleSheet(f"color:{TEXT_DIM};padding:6px;")
+        self.chat_layout.insertWidget(self.chat_layout.count() - 1, label)
 
     def _scroll_to_bottom(self):
-        sb = self.scroll.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        self.scroll.verticalScrollBar().setValue(
+            self.scroll.verticalScrollBar().maximum()
+        )
 
     def _clear_chat(self):
         while self.chat_layout.count() > 1:
             item = self.chat_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        mode = get_mode(self.current_mode)
-        self._append_system(f"{mode.welcome}")
+        self._append_system(get_mode(self.current_mode).welcome)
 
-    # ─── Mode switcher ────────────────────────────────────────────────────
+    # ─── Mode ─────────────────────────────────────────────────────────────
 
     def _on_mode_change(self, index: int):
         key = self.mode_combo.itemData(index)
         if key and key != self.current_mode:
             self.current_mode = key
             self.tutor.set_mode(key)
-            mode = get_mode(key)
-            self._append_system(f"Switched to {mode.name} mode")
+            self._append_system(f"Switched to {get_mode(key).name} mode")
 
-    # ─── Voice toggle ─────────────────────────────────────────────────────
+    # ─── Voice ────────────────────────────────────────────────────────────
 
     def _toggle_voice(self, checked: bool):
         self.voice_mode = checked
         self.voice_btn.setText("Voice: ON" if checked else "Voice: OFF")
         if checked:
-            self._start_voice_input()
+            threading.Thread(target=self._listen, daemon=True).start()
 
-    def _start_voice_input(self):
-        def _listen():
-            try:
-                from voice.speech_to_text import listen
-                self._append_system("Listening...")
-                text = listen()
-                if text:
-                    self.append_signal.emit(text, True)
-                    self.input_field.setText(text)
-                    QTimer.singleShot(100, self._send)
-            except Exception as e:
-                self._append_system(f"Voice error: {e}")
-            finally:
-                self.voice_btn.setChecked(False)
-                self.voice_mode = False
-                self.voice_btn.setText("Voice: OFF")
+    def _listen(self):
+        try:
+            from voice.speech_to_text import listen
+            self._append_system("Listening...")
+            text = listen()
+            if text:
+                self.append_signal.emit(text, True)
+                self.input_field.setText(text)
+                QTimer.singleShot(100, self._send)
+        except Exception as e:
+            self._append_system(f"Voice error: {e}")
+        finally:
+            self.voice_btn.setChecked(False)
+            self.voice_mode = False
+            self.voice_btn.setText("Voice: OFF")
 
-        threading.Thread(target=_listen, daemon=True).start()
-
-    # ─── Document upload ──────────────────────────────────────────────────
+    # ─── Upload ───────────────────────────────────────────────────────────
 
     def _upload_doc(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -684,17 +542,14 @@ class IliChatWindow(QMainWindow):
         )
         if not path:
             return
-
-        ext = os.path.splitext(path)[1].lower()
-
         try:
-            if ext == ".pdf":
+            if path.lower().endswith(".pdf"):
                 try:
                     import pypdf
                     reader  = pypdf.PdfReader(path)
                     content = "\n".join(p.extract_text() or "" for p in reader.pages)
                 except ImportError:
-                    content = "[pypdf not installed — cannot read PDF]"
+                    content = "[pypdf not installed]"
             else:
                 with open(path, "r", encoding="utf-8", errors="ignore") as f:
                     content = f.read()
@@ -707,7 +562,6 @@ class IliChatWindow(QMainWindow):
             self.doc_label.setText(f"Attached: {self._doc_name}")
             self.doc_bar.show()
             self.input_field.setPlaceholderText(f"Ask about {self._doc_name}...")
-
         except Exception as e:
             self._append_system(f"Could not read file: {e}")
 
@@ -733,52 +587,34 @@ class IliChatWindow(QMainWindow):
         msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg.setDefaultButton(QMessageBox.Yes)
         msg.setStyleSheet(f"""
-            QMessageBox {{
-                background: {CARD2};
-                color: {TEXT};
-            }}
-            QPushButton {{
-                background: {ACCENT};
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 6px 18px;
-                min-width: 60px;
-            }}
-            QPushButton:hover {{ background: #9D92FF; }}
+            QMessageBox {{ background:{CARD2}; color:{TEXT}; }}
+            QPushButton {{ background:{ACCENT}; color:white; border:none; border-radius:6px; padding:6px 18px; min-width:60px; }}
+            QPushButton:hover {{ background:#9D92FF; }}
         """)
-        result = msg.exec_() == QMessageBox.Yes
-        result_q.put(result)
+        result_q.put(msg.exec_() == QMessageBox.Yes)
 
     # ─── Public API ───────────────────────────────────────────────────────
 
-    def set_gesture(self, gesture: str):
-        state_map = {
-            "thinking": "thinking", "talking": "talking",
-            "talking_1": "talking", "talking_2": "talking",
-            "happy": "happy", "idle": "idle",
-        }
-        self.avatar_panel.set_state(state_map.get(gesture, "idle"))
-
-    def start_talking(self):  self.avatar_panel.set_state("talking")
-    def stop_talking(self):   self.avatar_panel.set_state("idle")
-    def start_thinking(self): self.avatar_panel.set_state("thinking")
-    def stop_thinking(self):  self.avatar_panel.set_state("idle")
+    def start_talking(self):  self._set_state("talking")
+    def stop_talking(self):   self._set_state("idle")
+    def start_thinking(self): self._set_state("thinking")
+    def stop_thinking(self):  self._set_state("idle")
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 def run_gui(tutor, engine_name: str, initial_mode: str = "general",
-            voice_output: bool = False, agent_enabled: bool = False):
+            voice_output: bool = False, agent_enabled: bool = False,
+            avatar=None):
     app = QApplication.instance() or QApplication(sys.argv)
     app.setStyle("Fusion")
-
     window = IliChatWindow(
         tutor         = tutor,
         engine_name   = engine_name,
         initial_mode  = initial_mode,
         voice_output  = voice_output,
         agent_enabled = agent_enabled,
+        avatar        = avatar,
     )
     window.show()
     sys.exit(app.exec_())
